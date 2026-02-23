@@ -372,6 +372,33 @@
   }
   #soundToggle:hover { background: rgba(0,0,0,0.8); }
   #soundToggle.muted { opacity: 0.4; }
+
+  #reloadBtn {
+    position: absolute;
+    bottom: 14px;
+    right: 70px;
+    z-index: 30;
+    font-family: 'Bangers', cursive;
+    font-size: 18px;
+    letter-spacing: 2px;
+    background: rgba(0,0,0,0.55);
+    border: 2px solid rgba(255,215,0,0.4);
+    border-radius: 14px;
+    padding: 10px 20px;
+    cursor: pointer;
+    color: #ffd700;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+  #reloadBtn:active { background: rgba(255,215,0,0.3); }
+
+  @media (pointer: coarse), (max-width: 800px) {
+    #reloadBtn { display: flex; }
+  }
 </style>
 </head>
 <body>
@@ -397,6 +424,7 @@
 
   <div id="nukeFlash"></div>
 
+  <button id="reloadBtn" title="Nachladen">🔄 NACHLADEN</button>
   <button id="soundToggle" title="Sound an/aus">🔊</button>
 
   <div id="overlay">
@@ -1033,6 +1061,7 @@ let mouseX = 0, mouseY = 0;
 let lastTime = 0;
 let timerInterval;
 let waveStarting = false;
+let waveTransitioning = false;
 let shakeAmount = 0;
 let shakeDuration = 0;
 
@@ -1259,7 +1288,7 @@ function shoot(mx,my){
   const shotRadius=WEAPONS[firedWeapon].radius||0;
 
   // NUKE
-  if(firedWeapon==='nuke'){ triggerNuke(); return; }
+  if(firedWeapon==='nuke'){ triggerNuke(mx, my); return; }
 
   // Explosion visual for area weapons
   if(shotRadius>0){
@@ -1293,7 +1322,7 @@ function shoot(mx,my){
 
 function killChicken(c,mx,my){
   c.die(); score+=c.points;
-  playRandomChickenHit(); // Random chicken sound!
+  playRandomChickenHit();
   if(!c.counted){ c.counted=true; waveKills++; updateWaveUI(); }
   scoreDisplay.textContent=score;
   spawnHitParticles(c.x,c.y);
@@ -1301,7 +1330,7 @@ function killChicken(c,mx,my){
   txt.className='hit-text'; txt.textContent='+'+c.points;
   txt.style.left=(c.x-20)+'px'; txt.style.top=(c.y-20)+'px';
   container.appendChild(txt); setTimeout(()=>txt.remove(),900);
-  if(waveKills>=waveTarget) waveComplete();
+  if(waveKills>=waveTarget && !waveTransitioning) waveComplete();
 }
 
 function pickupWeapon(p){
@@ -1317,16 +1346,29 @@ function pickupWeapon(p){
   container.appendChild(txt); setTimeout(()=>txt.remove(),1600);
 }
 
-function triggerNuke(){
+function triggerNuke(mx, my){
   sndNuke();
   nukeFlash.classList.add('active');
   shakeAmount=30; shakeDuration=2;
-  spawnExplosion(W/2,H/2,500,'#ffff00','#ff4400');
-  chickens.forEach(c=>{
-    if(c.alive){ c.die(); score+=c.points; if(!c.counted){c.counted=true;waveKills++;} spawnHitParticles(c.x,c.y,6); }
-  });
-  scoreDisplay.textContent=score;
-  setTimeout(()=>{ nukeFlash.classList.remove('active'); winGame(); },3500);
+  // Explosion centered on click
+  spawnExplosion(mx, my, 500, '#ffff00', '#ff4400');
+  // After the siren delay, kill all chickens everywhere
+  setTimeout(()=>{
+    spawnExplosion(W/2, H/3, 600, '#ffffff', '#ff8800');
+    chickens.forEach(c=>{
+      if(c.alive){ c.die(); score+=c.points; if(!c.counted){c.counted=true;waveKills++;} spawnHitParticles(c.x,c.y,6); }
+    });
+    scoreDisplay.textContent=score;
+    // Also kill any new chickens that may spawn
+    const nukeKillInterval = setInterval(()=>{
+      chickens.forEach(c=>{ if(c.alive){ c.die(); spawnHitParticles(c.x,c.y,4); } });
+    }, 200);
+    setTimeout(()=>{
+      clearInterval(nukeKillInterval);
+      nukeFlash.classList.remove('active');
+      winGame();
+    }, 2500);
+  }, 1200);
 }
 
 function reload(){
@@ -1337,11 +1379,17 @@ function reload(){
 function getWaveTarget(w){ return 4+w; }
 function getSpeedMult(w){ return 1+(w-1)*0.08; }
 function getSpecialWeapon(w){
-  if(w===3)return'shotgun'; if(w===6)return'grenade'; if(w===9)return'rocket'; if(w===12)return'bomb'; if(w===15)return'nuke'; return null;
+  if(w>=15) return 'nuke';
+  if(w>=12) return 'bomb';
+  if(w>=9) return 'rocket';
+  if(w>=6) return 'grenade';
+  if(w>=3) return 'shotgun';
+  return null;
 }
 
 function startWave(){
   waveKills=0; waveTarget=getWaveTarget(wave); timeLeft=30;
+  waveTransitioning=false;
   timeDisplay.textContent='30'; timeDisplay.className='';
   chickens=[]; powerups=[];
   updateWaveUI(); updateWeaponUI();
@@ -1378,6 +1426,8 @@ function startWave(){
 }
 
 function waveComplete(){
+  if(waveTransitioning) return;
+  waveTransitioning=true;
   clearInterval(timerInterval);
   sndWaveComplete();
   if(wave>=maxWave){ winGame(); return; }
@@ -1501,11 +1551,31 @@ canvas.addEventListener('click',e=>{ ensureAudio(); shoot(e.clientX,e.clientY); 
 canvas.addEventListener('contextmenu',e=>{e.preventDefault();reload();});
 document.addEventListener('keydown',e=>{if(e.code==='KeyR'||e.code==='Space'){e.preventDefault();reload();}});
 
+// Touch support for mobile
+canvas.addEventListener('touchstart',e=>{
+  e.preventDefault(); ensureAudio();
+  const touch=e.touches[0];
+  mouseX=touch.clientX; mouseY=touch.clientY;
+  shoot(touch.clientX,touch.clientY);
+},{passive:false});
+canvas.addEventListener('touchmove',e=>{
+  const touch=e.touches[0];
+  mouseX=touch.clientX; mouseY=touch.clientY;
+},{passive:true});
+
+// Reload button (mobile)
+document.getElementById('reloadBtn').addEventListener('click',e=>{
+  e.stopPropagation(); ensureAudio(); reload();
+});
+document.getElementById('reloadBtn').addEventListener('touchstart',e=>{
+  e.stopPropagation(); e.preventDefault(); ensureAudio(); reload();
+},{passive:false});
+
 startBtn.addEventListener('click',()=>{ ensureAudio(); startGame(); });
 
 function startGame(){
   score=0;wave=1;waveKills=0;timeLeft=30;ammo=maxAmmo;totalShots=0;totalHits=0;
-  currentWeapon='pistol';specialAmmo=0;
+  currentWeapon='pistol';specialAmmo=0;waveTransitioning=false;
   chickens=[];particles=[];feathers=[];powerups=[];
   waveTarget=getWaveTarget(1);
   scoreDisplay.textContent='0'; timeDisplay.textContent='30'; timeDisplay.className='';
